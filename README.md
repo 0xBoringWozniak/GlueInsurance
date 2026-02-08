@@ -92,7 +92,6 @@ This architecture uses a Glue-native INS token:
 ## Local Run
 
 ```bash
-cd /Users/anatolijkrestenko/Documents/GlueInsurance/contracts
 npm install
 npm run build
 npm test
