@@ -1,4 +1,4 @@
-import type { HistoryEvent } from "@/lib/mockData";
+import type { HistoryEvent } from "@/lib/strategyData";
 
 function asDate(value: string): string {
   return new Intl.DateTimeFormat("en-US", {

@@ -8,8 +8,8 @@ const sans = Space_Grotesk({ subsets: ["latin"], variable: "--font-sans" });
 const mono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "InsuranceGlue Dashboard",
-  description: "ERC4626 strategy insurance with Glue-style fee routing",
+  title: "Glue Insurance",
+  description: "Glue Insurance strategy coverage dashboard",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -1,4 +1,4 @@
-import type { StrategyPool } from "@/lib/mockData";
+import type { StrategyPool } from "@/lib/strategyData";
 
 function usd(value: number): string {
   return new Intl.NumberFormat("en-US", {
