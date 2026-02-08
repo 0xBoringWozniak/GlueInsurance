@@ -5,30 +5,42 @@ async function main() {
   console.log("Deployer:", deployer.address);
 
   const MockUSDC = await ethers.getContractFactory("MockUSDC");
-  const asset = await MockUSDC.deploy();
-  await asset.waitForDeployment();
+  const usdc = await MockUSDC.deploy();
+  await usdc.waitForDeployment();
 
-  const InsurancePool = await ethers.getContractFactory("InsurancePool");
-  const pool = await InsurancePool.deploy(await asset.getAddress(), deployer.address);
-  await pool.waitForDeployment();
-
-  const InsuranceGlueVault = await ethers.getContractFactory("InsuranceGlueVault");
-  const vault = await InsuranceGlueVault.deploy(
-    await asset.getAddress(),
-    "Insurance Glue Vault",
-    "iGLUE",
-    deployer.address,
-    deployer.address,
-    deployer.address,
-    await pool.getAddress()
-  );
+  const MockERC4626Vault = await ethers.getContractFactory("MockERC4626Vault");
+  const vault = await MockERC4626Vault.deploy(await usdc.getAddress());
   await vault.waitForDeployment();
 
-  await (await pool.setVault(await vault.getAddress())).wait();
+  const InsurancePool = await ethers.getContractFactory("InsurancePool");
+  const pool = await InsurancePool.deploy(
+    await usdc.getAddress(),
+    ethers.parseEther("0.10"),
+    1_000_000n * 10n ** 6n,
+    3600,
+    10,
+    deployer.address
+  );
+  await pool.waitForDeployment();
 
-  console.log("MockUSDC:", await asset.getAddress());
+  const INSToken = await ethers.getContractFactory("INSToken");
+  const ins = await INSToken.deploy("Insurance Share", "INS", deployer.address);
+  await ins.waitForDeployment();
+
+  const InsuranceRegistry = await ethers.getContractFactory("InsuranceRegistry");
+  const registry = await InsuranceRegistry.deploy();
+  await registry.waitForDeployment();
+
+  await (await pool.setVault(await vault.getAddress())).wait();
+  await (await pool.setINSToken(await ins.getAddress())).wait();
+  await (await ins.setPool(await pool.getAddress())).wait();
+  await (await registry.registerVault(await vault.getAddress(), await pool.getAddress())).wait();
+
+  console.log("MockUSDC:", await usdc.getAddress());
+  console.log("MockVault:", await vault.getAddress());
   console.log("InsurancePool:", await pool.getAddress());
-  console.log("InsuranceGlueVault:", await vault.getAddress());
+  console.log("INSToken:", await ins.getAddress());
+  console.log("Registry:", await registry.getAddress());
 }
 
 main().catch((error) => {

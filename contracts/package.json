@@ -5,6 +5,7 @@
   "scripts": {
     "build": "hardhat compile",
     "test": "hardhat test",
+    "deploy:local": "hardhat run scripts/deploy-local.ts --network hardhat",
     "deploy:sepolia": "hardhat run scripts/deploy.ts --network sepolia"
   },
   "devDependencies": {

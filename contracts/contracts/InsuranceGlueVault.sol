@@ -7,13 +7,20 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {InsurancePool} from "./InsurancePool.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+
+interface IGlueStickERC20 {
+    function applyTheGlue(address asset) external returns (address glue);
+}
 
 contract InsuranceGlueVault is ERC4626, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant BPS = 10_000;
+    uint256 public constant PRECISION = 1e18;
     uint256 public constant YEAR = 365 days;
+
+    address public constant OFFICIAL_GLUE_STICK_ERC20 = 0x5fEe29873DE41bb6bCAbC1E4FB0Fc4CB26a7Fd74;
 
     enum FeeType {
         MANAGEMENT,
@@ -26,19 +33,23 @@ contract InsuranceGlueVault is ERC4626, Ownable, ReentrancyGuard {
 
     address public treasury;
     address public lossSink;
-    InsurancePool public immutable insurancePool;
+    address public immutable glueStick;
+    address public immutable glue;
 
     uint256 public lastFeeAccrual;
 
+    event GlueInitialized(address indexed glueStick, address indexed glue, address indexed stickyAsset);
     event FeeParamsUpdated(uint16 managementFeeBps, uint16 performanceFeeBps, uint16 insuranceFeeShareBps);
     event TreasuryUpdated(address indexed treasury);
     event LossSinkUpdated(address indexed lossSink);
     event ManagementFeeAccrued(uint256 elapsed, uint256 feeAssets);
-    event FeeCharged(FeeType indexed feeType, uint256 totalFeeAssets, uint256 insuranceAssets, uint256 treasuryAssets);
-    event StrategyReported(uint256 gainAssets, uint256 lossAssets, uint256 performanceFeeAssets);
+    event FeeCharged(FeeType indexed feeType, uint256 totalFeeAssets, uint256 glueInsuranceAssets, uint256 treasuryAssets);
+    event StrategyReported(uint256 gainRequested, uint256 gainReceived, uint256 lossAssets, uint256 performanceFeeAssets);
 
     error InvalidBps();
     error ZeroAddress();
+    error InvalidGlueStick();
+    error GlueCreationFailed();
 
     constructor(
         IERC20 asset_,
@@ -47,14 +58,27 @@ contract InsuranceGlueVault is ERC4626, Ownable, ReentrancyGuard {
         address owner_,
         address treasury_,
         address lossSink_,
-        InsurancePool insurancePool_
+        address glueStickOverride_
     ) ERC20(name_, symbol_) ERC4626(asset_) Ownable(owner_) {
-        if (treasury_ == address(0) || lossSink_ == address(0) || address(insurancePool_) == address(0)) revert ZeroAddress();
+        if (treasury_ == address(0) || lossSink_ == address(0)) revert ZeroAddress();
+
+        address glueStickAddress = OFFICIAL_GLUE_STICK_ERC20;
+        if (block.chainid == 31337 && glueStickOverride_ != address(0)) {
+            glueStickAddress = glueStickOverride_;
+        } else if (glueStickOverride_ != address(0) && glueStickOverride_ != OFFICIAL_GLUE_STICK_ERC20) {
+            revert InvalidGlueStick();
+        }
+
+        address glueAddress = IGlueStickERC20(glueStickAddress).applyTheGlue(address(this));
+        if (glueAddress == address(0)) revert GlueCreationFailed();
 
         treasury = treasury_;
         lossSink = lossSink_;
-        insurancePool = insurancePool_;
+        glueStick = glueStickAddress;
+        glue = glueAddress;
         lastFeeAccrual = block.timestamp;
+
+        emit GlueInitialized(glueStickAddress, glueAddress, address(this));
     }
 
     function setFeeParams(uint16 managementFeeBps_, uint16 performanceFeeBps_, uint16 insuranceFeeShareBps_) external onlyOwner {
@@ -88,20 +112,22 @@ contract InsuranceGlueVault is ERC4626, Ownable, ReentrancyGuard {
     function report(uint256 gainAssets, uint256 lossAssets) external onlyOwner nonReentrant {
         _accrueManagementFee();
 
+        uint256 gainReceived = 0;
         if (gainAssets > 0) {
-            IERC20(asset()).safeTransferFrom(msg.sender, address(this), gainAssets);
+            gainReceived = _transferFromAsset(asset(), msg.sender, address(this), gainAssets);
         }
+
         if (lossAssets > 0) {
-            IERC20(asset()).safeTransfer(lossSink, lossAssets);
+            _transferAsset(asset(), lossSink, lossAssets);
         }
 
         uint256 performanceFeeAssets = 0;
-        if (gainAssets > 0 && performanceFeeBps > 0) {
-            performanceFeeAssets = (gainAssets * performanceFeeBps) / BPS;
+        if (gainReceived > 0 && performanceFeeBps > 0) {
+            performanceFeeAssets = _md512(gainReceived, performanceFeeBps, BPS);
             _chargeFee(performanceFeeAssets, FeeType.PERFORMANCE);
         }
 
-        emit StrategyReported(gainAssets, lossAssets, performanceFeeAssets);
+        emit StrategyReported(gainAssets, gainReceived, lossAssets, performanceFeeAssets);
     }
 
     function deposit(uint256 assets, address receiver) public override nonReentrant returns (uint256) {
@@ -137,7 +163,10 @@ contract InsuranceGlueVault is ERC4626, Ownable, ReentrancyGuard {
             return;
         }
 
-        uint256 feeAssets = (currentAssets * managementFeeBps * elapsed) / (YEAR * BPS);
+        uint256 annualizedBps = _md512(elapsed, BPS, YEAR);
+        uint256 effectiveBps = _md512(managementFeeBps, annualizedBps, BPS);
+        uint256 feeAssets = _md512(currentAssets, effectiveBps, BPS);
+
         lastFeeAccrual = block.timestamp;
 
         emit ManagementFeeAccrued(elapsed, feeAssets);
@@ -153,18 +182,33 @@ contract InsuranceGlueVault is ERC4626, Ownable, ReentrancyGuard {
         }
         if (feeAssets == 0) return;
 
-        uint256 insuranceAssets = (feeAssets * insuranceFeeShareBps) / BPS;
-        uint256 treasuryAssets = feeAssets - insuranceAssets;
+        uint256 glueInsuranceAssets = _md512(feeAssets, insuranceFeeShareBps, BPS);
+        uint256 treasuryAssets = feeAssets - glueInsuranceAssets;
 
-        if (insuranceAssets > 0) {
-            IERC20(asset()).safeTransfer(address(insurancePool), insuranceAssets);
-            insurancePool.notifyPremium(insuranceAssets);
+        if (glueInsuranceAssets > 0) {
+            _transferAsset(asset(), glue, glueInsuranceAssets);
         }
 
         if (treasuryAssets > 0) {
-            IERC20(asset()).safeTransfer(treasury, treasuryAssets);
+            _transferAsset(asset(), treasury, treasuryAssets);
         }
 
-        emit FeeCharged(feeType, feeAssets, insuranceAssets, treasuryAssets);
+        emit FeeCharged(feeType, feeAssets, glueInsuranceAssets, treasuryAssets);
+    }
+
+    function _transferAsset(address token, address to, uint256 amount) internal {
+        if (amount == 0) return;
+        IERC20(token).safeTransfer(to, amount);
+    }
+
+    function _transferFromAsset(address token, address from, address to, uint256 amount) internal returns (uint256 actualReceived) {
+        uint256 beforeBalance = IERC20(token).balanceOf(to);
+        IERC20(token).safeTransferFrom(from, to, amount);
+        uint256 afterBalance = IERC20(token).balanceOf(to);
+        actualReceived = afterBalance - beforeBalance;
+    }
+
+    function _md512(uint256 a, uint256 b, uint256 denominator) internal pure returns (uint256 result) {
+        result = Math.mulDiv(a, b, denominator);
     }
 }

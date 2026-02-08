@@ -102,7 +102,7 @@ export default function HomePage() {
       <section className="mt-8">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-2xl font-semibold text-ink">Strategy Pools</h2>
-          <p className="text-xs uppercase tracking-widest text-steel">Basis / Delta Neutral / AI Optimized</p>
+          <p className="text-xs uppercase tracking-widest text-steel">Pick your insurance</p>
         </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {pools.map((pool) => (
