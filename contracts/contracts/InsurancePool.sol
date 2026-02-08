@@ -16,6 +16,7 @@ interface IINSToken {
     function totalSupply() external view returns (uint256);
     function mint(address to, uint256 amount) external;
     function burn(address from, uint256 amount) external;
+    function glue() external view returns (address);
 }
 
 contract InsurancePool is Ownable, ReentrancyGuard {
@@ -24,6 +25,7 @@ contract InsurancePool is Ownable, ReentrancyGuard {
     address public immutable asset;
     address public vault;
     address public insToken;
+    address public insGlue;
 
     uint256 public premiumRate;
     uint256 public deductible;
@@ -40,6 +42,7 @@ contract InsurancePool is Ownable, ReentrancyGuard {
     error InvalidDeductible();
     error VaultNotSet();
     error InsTokenNotSet();
+    error GlueNotSet();
     error ZeroAmount();
     error InsufficientLiquidity();
     error CheckpointTooSoon();
@@ -49,14 +52,14 @@ contract InsurancePool is Ownable, ReentrancyGuard {
     error InvalidVaultSupply();
 
     event VaultSet(address indexed vault);
-    event INSTokenSet(address indexed insToken);
+    event INSTokenSet(address indexed insToken, address indexed insGlue);
     event PremiumRateUpdated(uint256 premiumRate);
     event ParametersUpdated(uint256 deductible, uint256 maxCoverage, uint256 cooldown, uint256 callerRewardBps);
 
     event Deposited(address indexed sender, address indexed receiver, uint256 assets, uint256 insMinted);
     event Withdrawn(address indexed sender, address indexed receiver, uint256 assets, uint256 insBurned);
 
-    event PremiumPaid(address indexed vault, uint256 assets);
+    event PremiumPaid(address indexed vault, address indexed insGlue, uint256 assets);
     event CheckpointUpdated(uint256 checkpointPPS, uint256 timestamp);
     event LossTriggered(address indexed vault, uint256 checkpointPPS, uint256 currentPPS, uint256 payout, uint256 callerReward);
 
@@ -89,8 +92,12 @@ contract InsurancePool is Ownable, ReentrancyGuard {
     function setINSToken(address insToken_) external onlyOwner {
         if (insToken_ == address(0)) revert ZeroAddress();
         if (insToken != address(0)) revert AlreadySet();
+
         insToken = insToken_;
-        emit INSTokenSet(insToken_);
+        insGlue = IINSToken(insToken_).glue();
+        if (insGlue == address(0)) revert GlueNotSet();
+
+        emit INSTokenSet(insToken_, insGlue);
     }
 
     function setPremiumRate(uint256 premiumRate_) external onlyOwner {
@@ -112,6 +119,11 @@ contract InsurancePool is Ownable, ReentrancyGuard {
 
     function poolAssets() public view returns (uint256) {
         return IERC20(asset).balanceOf(address(this));
+    }
+
+    function insGlueCollateral() public view returns (uint256) {
+        if (insGlue == address(0)) return 0;
+        return IERC20(asset).balanceOf(insGlue);
     }
 
     function pricePerShareVault() public view returns (uint256) {
@@ -164,11 +176,12 @@ contract InsurancePool is Ownable, ReentrancyGuard {
 
     function onPremium(uint256 assets) external nonReentrant {
         if (msg.sender != vault) revert VaultNotSet();
+        if (insGlue == address(0)) revert GlueNotSet();
         if (assets == 0) revert ZeroAmount();
 
-        IERC20(asset).safeTransferFrom(msg.sender, address(this), assets);
+        IERC20(asset).safeTransferFrom(msg.sender, insGlue, assets);
 
-        emit PremiumPaid(msg.sender, assets);
+        emit PremiumPaid(msg.sender, insGlue, assets);
     }
 
     function updateCheckpoint() external {

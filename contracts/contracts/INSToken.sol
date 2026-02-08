@@ -4,16 +4,48 @@ pragma solidity ^0.8.28;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
+interface IGlueStickERC20 {
+    function applyTheGlue(address asset) external returns (address glue);
+}
+
 contract INSToken is ERC20, Ownable {
+    address public constant OFFICIAL_GLUE_STICK_ERC20 = 0x5fEe29873DE41bb6bCAbC1E4FB0Fc4CB26a7Fd74;
+
     address public pool;
+    address public immutable glueStick;
+    address public immutable glue;
 
     error OnlyPool();
     error ZeroAddress();
     error PoolAlreadySet();
+    error InvalidGlueStick();
+    error GlueCreationFailed();
 
     event PoolSet(address indexed pool);
+    event GlueLinked(address indexed glueStick, address indexed glue, address indexed token);
 
-    constructor(string memory name_, string memory symbol_, address initialOwner) ERC20(name_, symbol_) Ownable(initialOwner) {}
+    constructor(
+        string memory name_,
+        string memory symbol_,
+        address initialOwner,
+        address glueStickOverride
+    ) ERC20(name_, symbol_) Ownable(initialOwner) {
+        address glueStickAddress = OFFICIAL_GLUE_STICK_ERC20;
+
+        if (block.chainid == 31337 && glueStickOverride != address(0)) {
+            glueStickAddress = glueStickOverride;
+        } else if (glueStickOverride != address(0) && glueStickOverride != OFFICIAL_GLUE_STICK_ERC20) {
+            revert InvalidGlueStick();
+        }
+
+        address glueAddress = IGlueStickERC20(glueStickAddress).applyTheGlue(address(this));
+        if (glueAddress == address(0)) revert GlueCreationFailed();
+
+        glueStick = glueStickAddress;
+        glue = glueAddress;
+
+        emit GlueLinked(glueStickAddress, glueAddress, address(this));
+    }
 
     modifier onlyPool() {
         if (msg.sender != pool) revert OnlyPool();

@@ -1,195 +1,92 @@
 # Glue Insurance MVP
 
-A hackathon-ready, fully on-chain insurance module for ERC4626 vaults.
+A fully on-chain insurance module for ERC4626 vaults with deterministic loss resolution.
 
-The system resolves insurance events automatically using deterministic on-chain rules.
-There is no governance-based claim resolution and no oracle dependency.
-Any address can execute loss resolution and receive a caller incentive.
+This version uses Glue for the INS token:
 
-## Architecture
+- `INSToken` is linked to a dedicated Glue contract via `applyTheGlue`.
+- Premium paid by vault is routed into INS Glue collateral.
+- INS backing is therefore tied to collateral accumulated in Glue.
 
-The MVP contains four core contracts:
+## Core Contracts
 
 - `contracts/contracts/InsurancePool.sol`
 - `contracts/contracts/INSToken.sol`
 - `contracts/contracts/InsuranceRegistry.sol`
-- `contracts/contracts/mocks/MockERC4626Vault.sol` (testing only)
+- `contracts/contracts/mocks/MockERC4626Vault.sol` (testing)
+- `contracts/contracts/MockUSDC.sol` (testing)
+- `contracts/contracts/MockGlueStick.sol` + `contracts/contracts/MockGlue.sol` (local testing)
 
-Supporting test token:
+## Flow Overview
 
-- `contracts/contracts/MockUSDC.sol`
+### 1) INS token and Glue binding
 
-## Contract Responsibilities
+`INSToken` constructor calls GlueStick:
 
-### InsurancePool
+- production path: official `GLUE_STICK_ERC20` (`0x5fEe29873DE41bb6bCAbC1E4FB0Fc4CB26a7Fd74`)
+- local hardhat path: mock override allowed
 
-Main insurance engine:
+Result:
 
-- Holds USDC insurance liquidity
-- Accepts insurer deposits and mints INS shares
-- Processes insurer withdrawals by burning INS shares
-- Receives premium from the vault without minting INS
-- Tracks vault PPS checkpoints
-- Resolves loss events on-chain in a permissionless way
-- Pays a caller reward to the trigger executor
+- `ins.glue()` returns dedicated Glue contract for INS.
 
-Key state variables:
+### 2) Insurer liquidity
 
-- `asset` (USDC)
-- `vault` (set once)
-- `insToken` (set once)
-- `premiumRate` (informational)
-- `deductible` (1e18 precision)
-- `maxCoverage`
-- `checkpointPPS`
-- `lastCheckpointTs`
-- `cooldown`
-- `lastTriggerTs`
-- `callerRewardBps`
+Insurers deposit USDC into `InsurancePool` and receive INS shares.
 
-### INSToken
+- first deposit: `minted = assets`
+- later deposits: `minted = assets * totalInsSupply / poolAssetsBeforeDeposit`
 
-ERC20 insurance share token:
+Withdraw burns INS and returns proportional USDC from pool.
 
-- Minted only by `InsurancePool`
-- Burned only by `InsurancePool`
-- Represents proportional ownership of insurance pool assets
+### 3) Premium routing to Glue
 
-### InsuranceRegistry
+Vault calls:
 
-Simple vault-to-pool mapping:
+- `InsurancePool.onPremium(uint256 assets)`
 
-- `registerVault(vault, pool)`
-- `getPool(vault)`
+Pool transfers USDC from vault directly to INS Glue:
 
-### MockERC4626Vault (testing)
+- `asset.transferFrom(vault, insGlue, assets)`
 
-Deterministic mock vault with configurable:
+No INS is minted in premium flow.
 
-- `totalAssets()`
-- `totalSupply()`
-- Premium transfer into `InsurancePool`
+### 4) Checkpoint and automatic loss resolution
 
-## On-Chain Logic
+- `updateCheckpoint()` is permissionless
+- baseline PPS can only move up
+- minimum interval between checkpoints is 1 day
 
-### Insurer Deposit
+`triggerLoss()` is permissionless and deterministic:
 
-`deposit(assets, receiver)`:
+- validates cooldown
+- checks deductible threshold
+- computes payout from PPS drawdown
+- caps by `min(maxCoverage, poolAssets())`
+- transfers payout to vault and caller reward to executor
 
-- Transfers USDC from user to pool
-- Mints INS shares
-
-Minting formula:
-
-- If `insTotalSupply == 0`: `minted = assets`
-- Else: `minted = assets * insTotalSupply / poolAssetsBeforeDeposit`
-
-### Insurer Withdraw
-
-`withdraw(insAmount, receiver)`:
-
-- Burns INS from caller
-- Sends proportional USDC to receiver
-
-Withdraw formula:
-
-- `assetsOut = insAmount * poolAssets / insTotalSupply`
-
-### Premium Flow
-
-`onPremium(assets)`:
-
-- Callable only by registered vault
-- Transfers USDC from vault into pool
-- Does not mint INS
-
-Result: premium increases backing per INS token.
-
-### Vault PPS
-
-`pricePerShareVault()`:
-
-- `pps = vault.totalAssets() * 1e18 / vault.totalSupply()`
-
-### Checkpoint Update
-
-`updateCheckpoint()` (permissionless):
-
-- Requires at least 1 day since last checkpoint
-- Requires `currentPPS >= checkpointPPS` (baseline cannot decrease)
-- Updates baseline and timestamp
-
-### Automatic Loss Resolution
-
-`triggerLoss()` (permissionless):
-
-Requirements:
-
-- Cooldown passed
-- Current PPS below deductible threshold
-
-Loss math:
-
-- `lossFraction = (checkpointPPS - currentPPS) * 1e18 / checkpointPPS`
-- `payoutWanted = vault.totalAssets() * lossFraction / 1e18`
-- `payoutCap = min(maxCoverage, poolAssets)`
-- `payout = min(payoutWanted, payoutCap)`
-
-Caller incentive:
-
-- `callerReward = payout * callerRewardBps / 10000`
-- `vaultAmount = payout - callerReward`
-
-Transfers:
-
-- USDC to vault (`vaultAmount`)
-- USDC to caller (`callerReward`)
-
-State update:
-
-- `lastTriggerTs = block.timestamp`
-
-## Security Notes
+## Security Properties
 
 - Solidity `^0.8.28`
-- Uses `SafeERC20` for all token transfers
-- Uses `ReentrancyGuard` on state-changing transfer functions
-- Applies checks-effects-interactions ordering
-- No unbounded loops in protocol-critical logic
+- `SafeERC20` for token operations
+- `ReentrancyGuard` on transfering state-changing paths
+- checks-effects-interactions ordering
+- no unbounded loops in critical logic
 
-## Tests
+## Test Coverage
 
-Test file:
+`contracts/test/insurance.test.ts` covers:
 
-- `contracts/test/insurance.test.ts`
-
-Covered scenarios:
-
-1. INS minting on first deposit
-2. Proportional minting on later deposits
+1. First INS mint
+2. Proportional INS mint
 3. Withdraw logic
-4. Premium increases pool assets without mint
-5. Checkpoint update constraints
+4. Premium increases INS Glue collateral without mint
+5. Checkpoint constraints
 6. Loss payout correctness
 7. Deductible enforcement
-8. Caller reward payment
+8. Caller incentive transfer
 9. Cooldown enforcement
 10. Insufficient liquidity protection
-
-## Deploy
-
-Script:
-
-- `contracts/scripts/deploy.ts`
-
-Deploy order:
-
-1. `MockUSDC`
-2. `MockERC4626Vault`
-3. `InsurancePool`
-4. `INSToken`
-5. `InsuranceRegistry`
-6. Wire pool/vault/token and register vault-to-pool
 
 ## Local Run
 

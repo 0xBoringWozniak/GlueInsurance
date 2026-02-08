@@ -9,6 +9,10 @@ describe("Insurance module", function () {
     const usdc = await MockUSDC.deploy();
     await usdc.waitForDeployment();
 
+    const MockGlueStick = await ethers.getContractFactory("MockGlueStick");
+    const mockGlueStick = await MockGlueStick.deploy();
+    await mockGlueStick.waitForDeployment();
+
     const MockERC4626Vault = await ethers.getContractFactory("MockERC4626Vault");
     const vault = await MockERC4626Vault.deploy(await usdc.getAddress());
     await vault.waitForDeployment();
@@ -25,7 +29,7 @@ describe("Insurance module", function () {
     await pool.waitForDeployment();
 
     const INSToken = await ethers.getContractFactory("INSToken");
-    const ins = await INSToken.deploy("Insurance Share", "INS", owner.address);
+    const ins = await INSToken.deploy("Insurance Share", "INS", owner.address, await mockGlueStick.getAddress());
     await ins.waitForDeployment();
 
     await pool.connect(owner).setVault(await vault.getAddress());
@@ -77,17 +81,19 @@ describe("Insurance module", function () {
     expect(await usdc.balanceOf(insurer1.address)).to.equal(9_999_400n * 10n ** 6n);
   });
 
-  it("4) premium increases poolAssets without mint", async function () {
+  it("4) premium increases INS Glue collateral without mint", async function () {
     const { insurer1, usdc, vault, pool, ins } = await deployFixture();
 
     await pool.connect(insurer1).deposit(1_000n * 10n ** 6n, insurer1.address);
     const supplyBefore = await ins.totalSupply();
+    const poolAssetsBefore = await pool.poolAssets();
 
     await vault.payPremiumToPool(await pool.getAddress(), 300n * 10n ** 6n);
 
-    expect(await pool.poolAssets()).to.equal(1_300n * 10n ** 6n);
+    expect(await pool.poolAssets()).to.equal(poolAssetsBefore);
+    expect(await pool.insGlueCollateral()).to.equal(300n * 10n ** 6n);
+    expect(await usdc.balanceOf(await ins.glue())).to.equal(300n * 10n ** 6n);
     expect(await ins.totalSupply()).to.equal(supplyBefore);
-    expect(await usdc.balanceOf(await pool.getAddress())).to.equal(1_300n * 10n ** 6n);
   });
 
   it("5) checkpoint update rules", async function () {

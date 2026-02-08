@@ -8,6 +8,10 @@ async function main() {
   const usdc = await MockUSDC.deploy();
   await usdc.waitForDeployment();
 
+  const MockGlueStick = await ethers.getContractFactory("MockGlueStick");
+  const glueStick = await MockGlueStick.deploy();
+  await glueStick.waitForDeployment();
+
   const MockERC4626Vault = await ethers.getContractFactory("MockERC4626Vault");
   const vault = await MockERC4626Vault.deploy(await usdc.getAddress());
   await vault.waitForDeployment();
@@ -24,7 +28,7 @@ async function main() {
   await pool.waitForDeployment();
 
   const INSToken = await ethers.getContractFactory("INSToken");
-  const ins = await INSToken.deploy("Insurance Share", "INS", deployer.address);
+  const ins = await INSToken.deploy("Insurance Share", "INS", deployer.address, await glueStick.getAddress());
   await ins.waitForDeployment();
 
   const InsuranceRegistry = await ethers.getContractFactory("InsuranceRegistry");
@@ -37,9 +41,11 @@ async function main() {
   await (await registry.registerVault(await vault.getAddress(), await pool.getAddress())).wait();
 
   console.log("MockUSDC:", await usdc.getAddress());
+  console.log("MockGlueStick:", await glueStick.getAddress());
   console.log("MockVault:", await vault.getAddress());
   console.log("InsurancePool:", await pool.getAddress());
   console.log("INSToken:", await ins.getAddress());
+  console.log("INS Glue:", await ins.glue());
   console.log("Registry:", await registry.getAddress());
 }
 
