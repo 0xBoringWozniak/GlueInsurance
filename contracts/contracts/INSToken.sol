@@ -14,6 +14,7 @@ contract INSToken is ERC20, Ownable {
     address public pool;
     address public immutable glueStick;
     address public immutable glue;
+    uint8 private immutable _tokenDecimals;
 
     error OnlyPool();
     error ZeroAddress();
@@ -27,6 +28,7 @@ contract INSToken is ERC20, Ownable {
     constructor(
         string memory name_,
         string memory symbol_,
+        uint8 decimals_,
         address initialOwner,
         address glueStickOverride
     ) ERC20(name_, symbol_) Ownable(initialOwner) {
@@ -43,6 +45,7 @@ contract INSToken is ERC20, Ownable {
 
         glueStick = glueStickAddress;
         glue = glueAddress;
+        _tokenDecimals = decimals_;
 
         emit GlueLinked(glueStickAddress, glueAddress, address(this));
     }
@@ -50,6 +53,10 @@ contract INSToken is ERC20, Ownable {
     modifier onlyPool() {
         if (msg.sender != pool) revert OnlyPool();
         _;
+    }
+
+    function decimals() public view override returns (uint8) {
+        return _tokenDecimals;
     }
 
     function setPool(address pool_) external onlyOwner {

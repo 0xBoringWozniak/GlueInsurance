@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 
-describe("Insurance module", function () {
+describe("Insurance module (INS + Glue collateral)", function () {
   async function deployFixture() {
     const [owner, insurer1, insurer2, caller] = await ethers.getSigners();
 
@@ -29,7 +29,7 @@ describe("Insurance module", function () {
     await pool.waitForDeployment();
 
     const INSToken = await ethers.getContractFactory("INSToken");
-    const ins = await INSToken.deploy("Insurance Share", "INS", owner.address, await mockGlueStick.getAddress());
+    const ins = await INSToken.deploy("Insurance Share", "INS", 6, owner.address, await mockGlueStick.getAddress());
     await ins.waitForDeployment();
 
     await pool.connect(owner).setVault(await vault.getAddress());
@@ -50,6 +50,8 @@ describe("Insurance module", function () {
 
     await usdc.connect(insurer1).approve(await pool.getAddress(), ethers.MaxUint256);
     await usdc.connect(insurer2).approve(await pool.getAddress(), ethers.MaxUint256);
+    await ins.connect(insurer1).approve(await pool.getAddress(), ethers.MaxUint256);
+    await ins.connect(insurer2).approve(await pool.getAddress(), ethers.MaxUint256);
 
     return { owner, insurer1, insurer2, caller, usdc, vault, pool, ins, registry };
   }
@@ -63,36 +65,39 @@ describe("Insurance module", function () {
   });
 
   it("2) proportional minting", async function () {
-    const { insurer1, insurer2, pool, ins } = await deployFixture();
+    const { insurer1, insurer2, pool, ins, vault } = await deployFixture();
 
     await pool.connect(insurer1).deposit(1_000n * 10n ** 6n, insurer1.address);
-    await pool.connect(insurer2).deposit(500n * 10n ** 6n, insurer2.address);
+    await vault.payPremiumToPool(await pool.getAddress(), 100n * 10n ** 6n);
+
+    await pool.connect(insurer2).deposit(550n * 10n ** 6n, insurer2.address);
 
     expect(await ins.balanceOf(insurer2.address)).to.equal(500n * 10n ** 6n);
   });
 
   it("3) withdraw logic", async function () {
-    const { insurer1, usdc, pool, ins } = await deployFixture();
+    const { insurer1, usdc, pool } = await deployFixture();
 
     await pool.connect(insurer1).deposit(1_000n * 10n ** 6n, insurer1.address);
-    await pool.connect(insurer1).withdraw(400n * 10n ** 6n, insurer1.address);
 
-    expect(await ins.balanceOf(insurer1.address)).to.equal(600n * 10n ** 6n);
-    expect(await usdc.balanceOf(insurer1.address)).to.equal(9_999_400n * 10n ** 6n);
+    const before = await usdc.balanceOf(insurer1.address);
+    await pool.connect(insurer1).redeem(400n * 10n ** 6n, insurer1.address);
+    const after = await usdc.balanceOf(insurer1.address);
+
+    expect(after - before).to.equal(399_600_000n);
   });
 
-  it("4) premium increases INS Glue collateral without mint", async function () {
+  it("4) premium increases poolAssets without mint", async function () {
     const { insurer1, usdc, vault, pool, ins } = await deployFixture();
 
     await pool.connect(insurer1).deposit(1_000n * 10n ** 6n, insurer1.address);
     const supplyBefore = await ins.totalSupply();
-    const poolAssetsBefore = await pool.poolAssets();
 
     await vault.payPremiumToPool(await pool.getAddress(), 300n * 10n ** 6n);
 
-    expect(await pool.poolAssets()).to.equal(poolAssetsBefore);
-    expect(await pool.insGlueCollateral()).to.equal(300n * 10n ** 6n);
-    expect(await usdc.balanceOf(await ins.glue())).to.equal(300n * 10n ** 6n);
+    expect(await pool.poolAssets()).to.equal(0);
+    expect(await pool.insGlueCollateral()).to.equal(1_300n * 10n ** 6n);
+    expect(await usdc.balanceOf(await ins.glue())).to.equal(1_300n * 10n ** 6n);
     expect(await ins.totalSupply()).to.equal(supplyBefore);
   });
 
@@ -130,10 +135,9 @@ describe("Insurance module", function () {
     await ethers.provider.send("evm_mine", []);
 
     const vaultBalBefore = await usdc.balanceOf(await vault.getAddress());
-    const tx = await pool.triggerLoss();
-    await tx.wait();
-
+    await pool.triggerLoss();
     const vaultBalAfter = await usdc.balanceOf(await vault.getAddress());
+
     expect(vaultBalAfter - vaultBalBefore).to.equal(1_998_000_000n);
   });
 
@@ -183,9 +187,6 @@ describe("Insurance module", function () {
 
   it("10) insufficient liquidity protection", async function () {
     const { insurer1, caller, vault, pool, usdc } = await deployFixture();
-
-    await pool.connect(insurer1).deposit(500n * 10n ** 6n, insurer1.address);
-    await pool.connect(insurer1).withdraw(500n * 10n ** 6n, insurer1.address);
 
     await pool.connect(insurer1).deposit(100n * 10n ** 6n, insurer1.address);
     await pool.setParameters(ethers.parseEther("0.10"), 0, 3600, 10);

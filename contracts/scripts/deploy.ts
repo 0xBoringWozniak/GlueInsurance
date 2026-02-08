@@ -28,7 +28,7 @@ async function main() {
   await pool.waitForDeployment();
 
   const INSToken = await ethers.getContractFactory("INSToken");
-  const ins = await INSToken.deploy("Insurance Share", "INS", deployer.address, await glueStick.getAddress());
+  const ins = await INSToken.deploy("Insurance Share", "INS", 6, deployer.address, await glueStick.getAddress());
   await ins.waitForDeployment();
 
   const InsuranceRegistry = await ethers.getContractFactory("InsuranceRegistry");

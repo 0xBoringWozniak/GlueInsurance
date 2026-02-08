@@ -2,11 +2,12 @@
 
 A fully on-chain insurance module for ERC4626 vaults with deterministic loss resolution.
 
-This version uses Glue for the INS token:
+This architecture uses a Glue-native INS token:
 
-- `INSToken` is linked to a dedicated Glue contract via `applyTheGlue`.
-- Premium paid by vault is routed into INS Glue collateral.
-- INS backing is therefore tied to collateral accumulated in Glue.
+- INS is linked to Glue via `applyTheGlue`.
+- User deposits are routed to INS Glue collateral.
+- Premium is routed to INS Glue collateral, increasing INS NAV.
+- Loss execution mints INS to protocol, immediately unglues, then pays ERC4626 vault.
 
 ## Core Contracts
 
@@ -19,67 +20,67 @@ This version uses Glue for the INS token:
 
 ## Flow Overview
 
-### 1) INS token and Glue binding
+### 1) InsurancePool links ERC4626 vault and INS Glue token
 
-`INSToken` constructor calls GlueStick:
+- Owner sets vault once with `setVault`.
+- Owner sets INS token once with `setINSToken`.
+- Pool reads `ins.glue()` and stores INS Glue address.
 
-- production path: official `GLUE_STICK_ERC20` (`0x5fEe29873DE41bb6bCAbC1E4FB0Fc4CB26a7Fd74`)
-- local hardhat path: mock override allowed
+### 2) Users deposit and receive INS tokens, collateral goes to Glue
 
-Result:
+`deposit(assets, receiver)`:
 
-- `ins.glue()` returns dedicated Glue contract for INS.
+- Transfers USDC from user directly to `insGlue`.
+- Mints INS to user.
+- Minting is proportional to current INS NAV:
+  - first deposit: `insMinted = assets`
+  - otherwise: `insMinted = assets * totalSupply / glueCollateralBefore`
 
-### 2) Insurer liquidity
+### 3) Strategy premium increases INS NAV
 
-Insurers deposit USDC into `InsurancePool` and receive INS shares.
+`onPremium(assets)` (only vault):
 
-- first deposit: `minted = assets`
-- later deposits: `minted = assets * totalInsSupply / poolAssetsBeforeDeposit`
+- Transfers USDC from vault directly to `insGlue`.
+- No INS minting.
+- Collateral per INS increases.
 
-Withdraw burns INS and returns proportional USDC from pool.
-
-### 3) Premium routing to Glue
-
-Vault calls:
-
-- `InsurancePool.onPremium(uint256 assets)`
-
-Pool transfers USDC from vault directly to INS Glue:
-
-- `asset.transferFrom(vault, insGlue, assets)`
-
-No INS is minted in premium flow.
-
-### 4) Checkpoint and automatic loss resolution
-
-- `updateCheckpoint()` is permissionless
-- baseline PPS can only move up
-- minimum interval between checkpoints is 1 day
+### 4) Automatic loss resolution
 
 `triggerLoss()` is permissionless and deterministic:
 
-- validates cooldown
-- checks deductible threshold
-- computes payout from PPS drawdown
-- caps by `min(maxCoverage, poolAssets())`
-- transfers payout to vault and caller reward to executor
+- Verifies cooldown.
+- Computes PPS drawdown against checkpoint and deductible.
+- Computes payout target and caps by:
+  - `maxCoverage`
+  - available collateral in Glue.
+- Mints extra INS to pool for required payout size.
+- Immediately unglues minted INS to USDC.
+- Sends USDC to vault and caller incentive to executor.
+
+### 5) User redeem path
+
+`redeem(insAmount, receiver)`:
+
+- Pulls INS from user.
+- Immediately unglues INS to selected collateral (USDC in this MVP).
+- Transfers USDC to receiver.
 
 ## Security Properties
 
 - Solidity `^0.8.28`
-- `SafeERC20` for token operations
-- `ReentrancyGuard` on transfering state-changing paths
-- checks-effects-interactions ordering
-- no unbounded loops in critical logic
+- `SafeERC20` for all token operations
+- Reentrancy protection on state-changing external paths
+- Deterministic formulas for payout and checkpoint logic
+- No unbounded loops in protocol-critical logic
+- Math uses `_md512`/`_md512Up` helper style
 
 ## Test Coverage
 
 `contracts/test/insurance.test.ts` covers:
 
-1. First INS mint
-2. Proportional INS mint
-3. Withdraw logic
+1. INS minting on first deposit
+2. Proportional minting after NAV change
+3. Redeem logic
 4. Premium increases INS Glue collateral without mint
 5. Checkpoint constraints
 6. Loss payout correctness

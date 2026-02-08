@@ -24,7 +24,7 @@ export type HistoryEvent = {
 export const pools: StrategyPool[] = [
   {
     id: "basis-usdc",
-    name: "Basis Carry USDC",
+    name: "INS-BASIS-USDC",
     description: "Cash-and-carry futures basis strategy with dynamic hedge bands.",
     strategyType: "Basis",
     tvlUsd: 1_000_000,
@@ -37,7 +37,7 @@ export const pools: StrategyPool[] = [
   },
   {
     id: "delta-neutral-eth",
-    name: "Delta Neutral ETH",
+    name: "INS-stETH",
     description: "Spot-perp delta neutral vault with volatility-aware rebalancing.",
     strategyType: "Delta Neutral",
     tvlUsd: 2_400_000,
@@ -50,7 +50,7 @@ export const pools: StrategyPool[] = [
   },
   {
     id: "ai-yield-usdc",
-    name: "AI Optimized Yield",
+    name: "INS-AI-YIELD-USDC",
     description: "Machine-guided routing across lending and LP venues.",
     strategyType: "AI Optimized",
     tvlUsd: 3_100_000,
